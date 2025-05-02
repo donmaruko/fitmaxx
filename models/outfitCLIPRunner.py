@@ -4,6 +4,7 @@ import os
 import sys
 from PIL import Image
 from torch.utils.data import DataLoader
+from torch.nn.functional import cosine_similarity
 import numpy as np
 import joblib  # for loading our classifier
 from sklearn.linear_model import LogisticRegression
