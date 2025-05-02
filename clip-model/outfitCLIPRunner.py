@@ -130,6 +130,7 @@ def interpret_drip_score(score):
     else:
         return "🧢 Needs work. Fit leans toward low-drip examples."
 
+# this is boilerplate code that extracts top and bottom halves of the person, include this in every model
 def extract_features(image_path):
     """
     Basic shared feature extraction for all models.
