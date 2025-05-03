@@ -1,16 +1,17 @@
 # Project Structure
 
 ```
-models/
-├── fusionrunner.py
-├── outfitCLIPRunner.py
-├── silhouette.py
-└── train-classifier.py
+hunterhacks/
+└── models/
+    ├── fusionrunner.py
+    ├── outfitCLIPRunner.py
+    ├── silhouette.py
+    └── train-classifier.py
 ```
 
 # Project Files
 
-## File: `fusionrunner.py`
+## File: `models/fusionrunner.py`
 
 ```python
 import os
@@ -28,6 +29,8 @@ import matplotlib.pyplot as plt
 from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph
 from langchain_core.runnables import RunnableLambda
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import PromptTemplate
 import mediapipe as mp
 
 # -----------------------------
@@ -229,15 +232,42 @@ def compute_drip_score_cosine(image_path, style, reference_db):
     }
 
 # -----------------------------
+# Generate Style Tip
+# -----------------------------
+tip_prompt = PromptTemplate.from_template("""
+You are a fashion stylist analyzing a user's outfit.
+Style: {style}
+Score: {score}
+Reasoning: {reason}
+
+Generate a short, helpful critique (1-2 sentences) about how their fit aligns with the style. Be specific and stylish.
+""")
+
+llm = ChatOpenAI(temperature=0.7)
+style_tip_chain = tip_prompt | llm
+
+def generate_style_tip(state: SilhouetteState) -> SilhouetteState:
+    tip = style_tip_chain.invoke({
+        "style": state.style,
+        "score": state.score,
+        "reason": ", ".join(state.reason)
+    })
+    return state.model_copy(up1date={"style_tip": tip.content})
+
+# -----------------------------
 # Build LangGraph Pipeline
 # -----------------------------
 workflow = StateGraph(SilhouetteState)
 workflow.add_node("extract_pose", RunnableLambda(extract_pose_landmarks))
 workflow.add_node("analyze_silhouette", RunnableLambda(calculate_proportions))
 workflow.add_node("score_silhouette", RunnableLambda(score_by_style))
+workflow.add_node("generate_tip", RunnableLambda(generate_style_tip))
+
 workflow.set_entry_point("extract_pose")
 workflow.add_edge("extract_pose", "analyze_silhouette")
 workflow.add_edge("analyze_silhouette", "score_silhouette")
+workflow.add_edge("score_silhouette", "generate_tip")
+
 graph = workflow.compile()
 
 # -----------------------------
@@ -258,13 +288,15 @@ if __name__ == "__main__":
         print(f"\n👕 [Cosine] Fit Analysis for: {result['style'].capitalize()}")
         print(f"Similarity to High Drip: {result['similarity_to_high']}")
         print(f"Similarity to Low Drip:  {result['similarity_to_low']}")
+        print("\n💬 Style Tip:")
+        print(silhouette_result["style_tip"])
         print(f"💧 Drip Score: {result['drip_score']} / 100")
     except ValueError as e:
         print(str(e))
 
 ```
 
-## File: `outfitCLIPRunner.py`
+## File: `models/outfitCLIPRunner.py`
 
 ```python
 import clip
@@ -548,7 +580,7 @@ else:
 
 ```
 
-## File: `silhouette.py`
+## File: `models/silhouette.py`
 
 ```python
 import cv2
@@ -668,7 +700,7 @@ if __name__ == "__main__":
 
 ```
 
-## File: `train-classifier.py`
+## File: `models/train-classifier.py`
 
 ```python
 import clip
