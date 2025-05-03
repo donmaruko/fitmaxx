@@ -15,13 +15,14 @@ from langgraph.graph import StateGraph
 from langchain_core.runnables import RunnableLambda
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import PromptTemplate
+from typing import Optional
 import mediapipe as mp
 
 # -----------------------------
 # CONFIG
 # -----------------------------
 chosen_style = sys.argv[1] if len(sys.argv) > 1 else "athleisure"
-test_image_path = "myfit.png"
+test_image_path = "models/myfit.png"
 
 # -----------------------------
 # Define State Schema
@@ -29,11 +30,12 @@ test_image_path = "myfit.png"
 class SilhouetteState(BaseModel):
     image_path: str
     style: str
-    landmarks: list = Field(default_factory=list)
-    image_shape: tuple = None
-    proportions: dict = None
+    landmarks: Optional[list] = Field(default_factory=list)
+    image_shape: Optional[tuple] = None
+    proportions: Optional[dict] = None
     score: int = 0
-    reason: list = Field(default_factory=list)
+    reason: Optional[list] = Field(default_factory=list)
+    style_tip: Optional[str] = None
 
 # -----------------------------
 # Pose Extraction using MediaPipe
@@ -251,6 +253,8 @@ workflow.set_entry_point("extract_pose")
 workflow.add_edge("extract_pose", "analyze_silhouette")
 workflow.add_edge("analyze_silhouette", "score_silhouette")
 workflow.add_edge("score_silhouette", "generate_tip")
+
+workflow.set_finish_point("generate_tip") 
 
 graph = workflow.compile()
 
