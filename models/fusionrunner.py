@@ -13,7 +13,15 @@ import matplotlib.pyplot as plt
 from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph
 from langchain_core.runnables import RunnableLambda
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import PromptTemplate
 import mediapipe as mp
+
+# -----------------------------
+# CONFIG
+# -----------------------------
+chosen_style = sys.argv[1] if len(sys.argv) > 1 else "athleisure"
+test_image_path = "myfit.png"
 
 # -----------------------------
 # Define State Schema
@@ -106,7 +114,27 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 model, preprocess = clip.load("ViT-B/32", device=device)
 
 # -----------------------------
-# Dataset Class
+# Segment Person from Background
+# -----------------------------
+def segment_person(image_path):
+    mp_selfie_segmentation = mp.solutions.selfie_segmentation
+    with mp_selfie_segmentation.SelfieSegmentation(model_selection=1) as segmenter:
+        image = cv2.imread(image_path)
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        results = segmenter.process(image_rgb)
+
+        if results.segmentation_mask is None:
+            print("[!] No person detected, using original image.")
+            return Image.open(image_path)
+
+        mask = results.segmentation_mask > 0.1
+        bg_image = np.zeros(image.shape, dtype=np.uint8)
+        person_only = np.where(mask[..., None], image, bg_image)
+        person_only_rgb = cv2.cvtColor(person_only, cv2.COLOR_BGR2RGB)
+        return Image.fromarray(person_only_rgb)
+
+# -----------------------------
+# Dataset and Reference Embeddings
 # -----------------------------
 class OutfitDataset(torch.utils.data.Dataset):
     def __init__(self, folder):
@@ -116,52 +144,52 @@ class OutfitDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         return preprocess(Image.open(self.paths[idx]))
 
-# -----------------------------
-# Build reference_db by scanning folders
-# -----------------------------
 reference_db = {}
-base_path = "outfits"
-styles = os.listdir(base_path)
+base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "outfits"))
+style_path = os.path.join(base_path, chosen_style)
 
-for style in styles:
-    style_path = os.path.join(base_path, style)
-    if not os.path.isdir(style_path):
+if not os.path.isdir(style_path):
+    raise FileNotFoundError(f"[!] Style folder '{chosen_style}' does not exist in outfits/")
+
+reference_db[chosen_style] = {}
+
+for tier in os.listdir(style_path):  # high/low
+    tier_path = os.path.join(style_path, tier)
+    if not os.path.isdir(tier_path):
         continue
 
-    reference_db[style] = {}
+    image_paths = [os.path.join(tier_path, f) for f in os.listdir(tier_path) if f.lower().endswith(('.jpg', '.png'))]
+    if not image_paths:
+        print(f"[!] No images found in {tier_path}")
+        continue
 
-    for tier in os.listdir(style_path):  # e.g. high, low
-        tier_path = os.path.join(style_path, tier)
-        if not os.path.isdir(tier_path):
-            continue
+    print(f"Processing {len(image_paths)} images in {chosen_style}/{tier}...")
 
-        image_paths = [os.path.join(tier_path, f) for f in os.listdir(tier_path) if f.lower().endswith(('.jpg', '.png'))]
-        if len(image_paths) == 0:
-            print(f"[!] No images found in {tier_path}")
-            continue
+    dataset = OutfitDataset(tier_path)
+    dataloader = DataLoader(dataset, batch_size=16, shuffle=False)
+    embeddings = []
 
-        print(f"Processing {len(image_paths)} images in {style}/{tier}...")
+    with torch.no_grad():
+        for batch in dataloader:
+            batch = batch.to(device)
+            encoded = model.encode_image(batch).cpu()
+            embeddings.extend(encoded)
 
-        dataset = OutfitDataset(tier_path)
-        dataloader = DataLoader(dataset, batch_size=16, shuffle=False)
-        embeddings = []
-
-        with torch.no_grad():
-            for batch in dataloader:
-                batch = batch.to(device)
-                encoded = model.encode_image(batch).cpu()
-                embeddings.extend(encoded)
-
-        reference_db[style][tier] = {"embeddings": embeddings, "paths": image_paths}
+    reference_db[chosen_style][tier] = {
+        "embeddings": embeddings,
+        "paths": image_paths
+    }
 
 # -----------------------------
 # Scoring Functions
 # -----------------------------
 def score_image(image_path, reference_embeddings):
-    image = preprocess(Image.open(image_path)).unsqueeze(0).to(device)
+    person_cropped = segment_person(image_path)
+    image = preprocess(person_cropped).unsqueeze(0).to(device)
+
     with torch.no_grad():
         image_embedding = model.encode_image(image).cpu()
-    
+
     image_embedding /= image_embedding.norm(dim=-1, keepdim=True)
     reference_embeddings = torch.stack(reference_embeddings)
     reference_embeddings /= reference_embeddings.norm(dim=-1, keepdim=True)
@@ -170,10 +198,10 @@ def score_image(image_path, reference_embeddings):
 
 def compute_drip_score_cosine(image_path, style, reference_db):
     if style not in reference_db:
-        raise ValueError(f"[!] Style '{style}' not found in reference database.")
+        raise ValueError(f"[!] Style '{style}' not found.")
     if "high" not in reference_db[style] or "low" not in reference_db[style]:
-        raise ValueError(f"[!] Missing 'high' or 'low' tier in '{style}' references.")
-    
+        raise ValueError(f"[!] Missing 'high' or 'low' tier in '{style}'.")
+
     high_embeds = reference_db[style]["high"]["embeddings"]
     low_embeds = reference_db[style]["low"]["embeddings"]
     sim_high = score_image(image_path, high_embeds)
@@ -188,17 +216,41 @@ def compute_drip_score_cosine(image_path, style, reference_db):
     }
 
 # -----------------------------
+# Generate Style Tip
+# -----------------------------
+tip_prompt = PromptTemplate.from_template("""
+You are a fashion stylist analyzing a user's outfit.
+Style: {style}
+Score: {score}
+Reasoning: {reason}
+
+Generate a short, helpful critique (1-2 sentences) about how their fit aligns with the style. Be specific and stylish.
+""")
+
+llm = ChatOpenAI(temperature=0.7)
+style_tip_chain = tip_prompt | llm
+
+def generate_style_tip(state: SilhouetteState) -> SilhouetteState:
+    tip = style_tip_chain.invoke({
+        "style": state.style,
+        "score": state.score,
+        "reason": ", ".join(state.reason)
+    })
+    return state.model_copy(up1date={"style_tip": tip.content})
+
+# -----------------------------
 # Build LangGraph Pipeline
 # -----------------------------
 workflow = StateGraph(SilhouetteState)
-
 workflow.add_node("extract_pose", RunnableLambda(extract_pose_landmarks))
 workflow.add_node("analyze_silhouette", RunnableLambda(calculate_proportions))
 workflow.add_node("score_silhouette", RunnableLambda(score_by_style))
+workflow.add_node("generate_tip", RunnableLambda(generate_style_tip))
 
 workflow.set_entry_point("extract_pose")
 workflow.add_edge("extract_pose", "analyze_silhouette")
 workflow.add_edge("analyze_silhouette", "score_silhouette")
+workflow.add_edge("score_silhouette", "generate_tip")
 
 graph = workflow.compile()
 
@@ -206,25 +258,22 @@ graph = workflow.compile()
 # Run Example
 # -----------------------------
 if __name__ == "__main__":
-    test_image_path = "models/myfit.png"
-    chosen_style = sys.argv[1] if len(sys.argv) > 1 else "athleisure"
-
     if not os.path.exists(test_image_path):
-        print("[!] No test image found. Drop one in and update the test image path.")
+        print("[!] No test image found. Please drop one into 'models/myfit.png'")
         sys.exit(1)
 
-    # Run silhouette analysis
     silhouette_result = graph.invoke({"image_path": test_image_path, "style": chosen_style})
     print("\nSilhouette Evaluation")
     print("Score:", silhouette_result["score"])
     print("Reasoning:", silhouette_result["reason"])
 
-    # Run CLIP-based scoring
     try:
         result = compute_drip_score_cosine(test_image_path, chosen_style, reference_db)
         print(f"\n👕 [Cosine] Fit Analysis for: {result['style'].capitalize()}")
         print(f"Similarity to High Drip: {result['similarity_to_high']}")
         print(f"Similarity to Low Drip:  {result['similarity_to_low']}")
+        print("\n💬 Style Tip:")
+        print(silhouette_result["style_tip"])
         print(f"💧 Drip Score: {result['drip_score']} / 100")
     except ValueError as e:
         print(str(e))
