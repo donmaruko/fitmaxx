@@ -8,6 +8,7 @@ from PIL import Image
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, accuracy_score
 from sklearn.model_selection import train_test_split
+from langtest import extract_body_ratios  # Reuse your existing pose feature code
 
 # -----------------------------
 # CLI Args
@@ -36,6 +37,14 @@ def extract_embedding(image_path):
         embedding = model.encode_image(image).cpu().squeeze().numpy()
     return embedding
 
+def extract_features(image_path):
+    """Returns [clip_embedding..., torso_leg_ratio, limb_symmetry]"""
+    clip_emb = extract_embedding(image_path)
+    torso_leg_ratio, limb_symmetry = extract_body_ratios(image_path)
+    if torso_leg_ratio is None or limb_symmetry is None:
+        raise ValueError("Failed to extract pose ratios.")
+    return np.concatenate((clip_emb, [torso_leg_ratio, limb_symmetry]))
+
 # -----------------------------
 # Training Phase
 # -----------------------------
@@ -56,11 +65,11 @@ for label in ["high", "low"]:
             continue
         path = os.path.join(folder, fname)
         try:
-            emb = extract_embedding(path)
-            X.append(emb)
+            feat = extract_features(path)
+            X.append(feat)
             y.append(1 if label == "high" else 0)
         except Exception as e:
-            print(f"⚠️ Error with {path}: {e}")
+            print(f"⚠️ Skipped {fname}: {e}")
 
 X = np.array(X)
 y = np.array(y)
@@ -78,19 +87,19 @@ print("\n📊 Evaluation Report:")
 print(classification_report(y_test, y_pred))
 print(f"🎯 Accuracy: {accuracy_score(y_test, y_pred) * 100:.2f}%")
 
-joblib.dump(clf, f"clip_classifier_{input_style}.pkl")
-print(f"✅ Classifier saved to clip_classifier_{input_style}.pkl")
+joblib.dump(clf, f"fit_classifier_{input_style}.pkl")
+print(f"✅ Classifier saved to fit_classifier_{input_style}.pkl")
 
 # -----------------------------
 # Predict on Input Image
 # -----------------------------
 try:
-    test_emb = extract_embedding(input_image)
+    test_feat = extract_features(input_image)
 except Exception as e:
     print(f"❌ Failed to process input image: {e}")
     sys.exit(1)
 
-proba = clf.predict_proba([test_emb])[0][1]  # probability of being "high"
+proba = clf.predict_proba([test_feat])[0][1]  # probability of "high"
 score = round(proba * 100, 2)
 
 print(f"\n🖼️  Analyzing: {input_image}")
