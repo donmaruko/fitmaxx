@@ -14,7 +14,8 @@ from rembg import remove
 from io import BytesIO
 import mediapipe as mp
 
-
+if "OPENAI_API_KEY" not in os.environ:
+    raise EnvironmentError("❌ Please set your OPENAI_API_KEY environment variable before running this script.")
 llm = ChatOpenAI(model="gpt-3.5-turbo")  # or "gpt-4" if available
 
 # -----------------------------
