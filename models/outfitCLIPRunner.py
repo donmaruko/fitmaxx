@@ -6,23 +6,35 @@ from PIL import Image
 from torch.utils.data import DataLoader
 from torch.nn.functional import cosine_similarity
 import numpy as np
-import joblib  # for loading our classifier
+import joblib
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics.pairwise import cosine_similarity
+from mediapipe.python.solutions import selfie_segmentation
+import cv2
 
-# Load the CLIP model + preprocessing
+# -----------------------------
+# CLI Params & Paths
+# -----------------------------
+chosen_style = sys.argv[1] if len(sys.argv) > 1 else "athleisure"
+test_image_path = "models/whatever.jpeg"
+
+# -----------------------------
+# CLIP model setup
+# -----------------------------
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model, preprocess = clip.load("ViT-B/32", device=device)
 
-# Optionally load the classifier if using it.
-# Ensure you have trained and saved this model (drip_classifier.pkl) beforehand.
+# -----------------------------
+# Classifier loading (optional)
+# -----------------------------
 USE_CLASSIFIER = "--use-clf" in sys.argv
+clf = None
 if USE_CLASSIFIER:
     clf = joblib.load("drip_classifier.pkl")
     print("[*] Using classifier-based scoring.")
 
 # -----------------------------
-# Dataset Class (must be above usage)
+# Dataset class
 # -----------------------------
 class OutfitDataset(torch.utils.data.Dataset):
     def __init__(self, folder):
@@ -33,47 +45,47 @@ class OutfitDataset(torch.utils.data.Dataset):
         return preprocess(Image.open(self.paths[idx]))
 
 # -----------------------------
-# Build reference_db by scanning folders
+# Build reference_db
 # -----------------------------
-reference_db = {}  # style → tier → list of embeddings, and paths stored separately if needed
-
+reference_db = {}
 base_path = "outfits"
-styles = os.listdir(base_path)
+style_path = os.path.join(base_path, chosen_style)
 
-for style in styles:
-    style_path = os.path.join(base_path, style)
-    if not os.path.isdir(style_path):
+if not os.path.isdir(style_path):
+    raise FileNotFoundError(f"[!] Style folder '{chosen_style}' not found in {base_path}/")
+
+reference_db[chosen_style] = {}
+
+for tier in ["high", "low"]:
+    tier_path = os.path.join(style_path, tier)
+    if not os.path.isdir(tier_path):
+        print(f"[!] Tier folder '{tier}' missing in {chosen_style}/")
         continue
 
-    reference_db[style] = {}
+    image_paths = [os.path.join(tier_path, f) for f in os.listdir(tier_path) if f.lower().endswith(('.jpg', '.png'))]
+    if not image_paths:
+        print(f"[!] No images found in {tier_path}")
+        continue
 
-    for tier in os.listdir(style_path):  # e.g. high, low
-        tier_path = os.path.join(style_path, tier)
-        if not os.path.isdir(tier_path):
-            continue
+    print(f"Processing {len(image_paths)} images in {chosen_style}/{tier}...")
 
-        image_paths = [os.path.join(tier_path, f) for f in os.listdir(tier_path) if f.lower().endswith(('.jpg', '.png'))]
-        if len(image_paths) == 0:
-            print(f"[!] No images found in {tier_path}")
-            continue
+    dataset = OutfitDataset(tier_path)
+    dataloader = DataLoader(dataset, batch_size=16, shuffle=False)
+    embeddings = []
 
-        print(f"Processing {len(image_paths)} images in {style}/{tier}...")
+    with torch.no_grad():
+        for batch in dataloader:
+            batch = batch.to(device)
+            encoded = model.encode_image(batch).cpu()
+            embeddings.extend(encoded)
 
-        dataset = OutfitDataset(tier_path)
-        dataloader = DataLoader(dataset, batch_size=16, shuffle=False)
-        embeddings = []
-
-        with torch.no_grad():
-            for batch in dataloader:
-                batch = batch.to(device)
-                encoded = model.encode_image(batch).cpu()
-                embeddings.extend(encoded)
-
-        # For classifier training or visualization, you might also store paths:
-        reference_db[style][tier] = {"embeddings": embeddings, "paths": image_paths}
+    reference_db[chosen_style][tier] = {
+        "embeddings": embeddings,
+        "paths": image_paths
+    }
 
 # -----------------------------
-# Encode text prompts for aesthetic classification
+# Text prompt encoding
 # -----------------------------
 text_inputs = torch.cat([
     clip.tokenize("a formal outfit"),
@@ -85,13 +97,33 @@ with torch.no_grad():
     text_embeddings = model.encode_text(text_inputs)
 
 # -----------------------------
-# Score functions
+# Segmentation
+# -----------------------------
+def segment_person(image_path):
+    segmenter = selfie_segmentation.SelfieSegmentation(model_selection=1)
+    image = cv2.imread(image_path)
+    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    results = segmenter.process(image_rgb)
+
+    if results.segmentation_mask is None:
+        print("[!] No person detected, using original image.")
+        return Image.open(image_path)
+
+    mask = results.segmentation_mask > 0.1
+    bg_image = np.zeros(image.shape, dtype=np.uint8)
+    person_only = np.where(mask[..., None], image, bg_image)
+    person_only_rgb = cv2.cvtColor(person_only, cv2.COLOR_BGR2RGB)
+    return Image.fromarray(person_only_rgb)
+
+# -----------------------------
+# Scoring
 # -----------------------------
 def score_image(image_path, reference_embeddings):
-    image = preprocess(Image.open(image_path)).unsqueeze(0).to(device)
+    person_cropped = segment_person(image_path)
+    image = preprocess(person_cropped).unsqueeze(0).to(device)
     with torch.no_grad():
         image_embedding = model.encode_image(image).cpu()
-    
+
     image_embedding /= image_embedding.norm(dim=-1, keepdim=True)
     reference_embeddings = torch.stack(reference_embeddings)
     reference_embeddings /= reference_embeddings.norm(dim=-1, keepdim=True)
@@ -99,22 +131,22 @@ def score_image(image_path, reference_embeddings):
     return similarities.mean().item()
 
 def image_to_style_similarity(image_path, text_embeddings):
-    image = preprocess(Image.open(image_path)).unsqueeze(0).to(device)
+    person_cropped = segment_person(image_path)
+    image = preprocess(person_cropped).unsqueeze(0).to(device)
     with torch.no_grad():
         image_embedding = model.encode_image(image).cpu().float()
-        image_embedding /= image_embedding.norm(dim=-1, keepdim=True)
-        text_embeddings = text_embeddings.cpu().float()
-        text_embeddings /= text_embeddings.norm(dim=-1, keepdim=True)
-        similarities = (text_embeddings @ image_embedding.T).squeeze()
-    return similarities  # returns similarity to all 3 style prompts
+    image_embedding /= image_embedding.norm(dim=-1, keepdim=True)
+    text_embeddings = text_embeddings.cpu().float()
+    text_embeddings /= text_embeddings.norm(dim=-1, keepdim=True)
+    similarities = (text_embeddings @ image_embedding.T).squeeze()
+    return similarities
 
 def compute_drip_score_cosine(image_path, style, reference_db):
-    # Existing cosine similarity–based scoring
     if style not in reference_db:
         raise ValueError(f"[!] Style '{style}' not found in reference database.")
     if "high" not in reference_db[style] or "low" not in reference_db[style]:
         raise ValueError(f"[!] Missing 'high' or 'low' tier in '{style}' references.")
-    
+
     high_embeds = reference_db[style]["high"]["embeddings"]
     low_embeds = reference_db[style]["low"]["embeddings"]
     sim_high = score_image(image_path, high_embeds)
@@ -129,13 +161,14 @@ def compute_drip_score_cosine(image_path, style, reference_db):
     }
 
 def compute_drip_score_classifier(image_path, style):
-    # Using the classifier to predict probability of a high-drip fit.
-    image = preprocess(Image.open(image_path)).unsqueeze(0).to(device)
+    if not clf:
+        raise RuntimeError("Classifier model not loaded. Use --use-clf and ensure 'drip_classifier.pkl' exists.")
+    person_cropped = segment_person(image_path)
+    image = preprocess(person_cropped).unsqueeze(0).to(device)
     with torch.no_grad():
         embedding = model.encode_image(image).cpu().numpy().flatten()
-    # Assuming the classifier was trained on normalized embeddings, ensure normalization:
+
     embedding = embedding / np.linalg.norm(embedding)
-    # Predict probability; clf.predict_proba returns array with columns [prob_low, prob_high]
     prob = clf.predict_proba([embedding])[0]
     p_high = prob[1]
     drip_score = round(p_high * 100, 2)
@@ -154,28 +187,22 @@ def interpret_drip_score(score):
         return "🧢 Needs work. Fit leans toward low-drip examples."
 
 # -----------------------------
-# Basic shared feature extraction (top/bottom segmentation) 
+# Feature Extraction
 # -----------------------------
 def extract_features(image_path):
-    """
-    Basic shared feature extraction for all models.
-    Segments top and bottom halves of the image for further processing.
-    Returns: dict with 'top_image', 'bottom_image' as PIL Images.
-    """
     image = Image.open(image_path).convert('RGB')
     w, h = image.size
-    top_crop_box = (0, 0, w, h // 2)
-    bottom_crop_box = (0, h // 2, w, h)
-    top_image = image.crop(top_crop_box)
-    bottom_image = image.crop(bottom_crop_box)
-    return {"original": image, "top_image": top_image, "bottom_image": bottom_image, "width": w, "height": h}
+    return {
+        "original": image,
+        "top_image": image.crop((0, 0, w, h // 2)),
+        "bottom_image": image.crop((0, h // 2, w, h)),
+        "width": w,
+        "height": h
+    }
 
 # -----------------------------
-# Example Usage (CLI-style)
+# Run Fit Analysis
 # -----------------------------
-test_image_path = "models/myfit.png"  # Replace with actual test image path
-chosen_style = sys.argv[1] if len(sys.argv) > 1 else "athleisure"
-
 if not os.path.exists(test_image_path):
     print("[!] No test image found. Drop one in and update the test image path.")
     sys.exit(1)
@@ -198,7 +225,6 @@ try:
     text_sim = image_to_style_similarity(test_image_path, text_embeddings)
     print(f"\nText style similarity (formal, casual, athleisure): {text_sim.tolist()}")
 
-    # Show extracted top and bottom halves for visual sanity check.
     features = extract_features(test_image_path)
     features["top_image"].show()
     features["bottom_image"].show()
@@ -206,26 +232,21 @@ try:
 except ValueError as e:
     print(str(e))
 
-
 # -----------------------------
-# Visual + Explainable Output: Find most similar reference fit and plot embeddings using UMAP/t-SNE
+# Visualization with UMAP
 # -----------------------------
 from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
 
 def find_most_similar_fit(image_path, reference_data):
-    image = preprocess(Image.open(image_path)).unsqueeze(0).to(device)
+    person_cropped = segment_person(image_path)
+    image = preprocess(person_cropped).unsqueeze(0).to(device)
     with torch.no_grad():
         image_embedding = model.encode_image(image).cpu()
     image_embedding /= image_embedding.norm(dim=-1, keepdim=True)
     ref_embeddings = torch.stack(reference_data["embeddings"])
     ref_embeddings /= ref_embeddings.norm(dim=-1, keepdim=True)
     similarities = cosine_similarity(image_embedding.numpy(), ref_embeddings.numpy())[0]
-    
-    # Debugging: Print similarities
-    print(f"Similarities: {similarities}")
-    print(f"Reference paths: {reference_data['paths']}")
-    
     best_idx = int(np.argmax(similarities))
     return reference_data["paths"][best_idx], similarities[best_idx]
 
@@ -236,10 +257,9 @@ def plot_embeddings_umap(user_embedding, high_embeddings, low_embeddings):
         print("Please install umap-learn (pip install umap-learn)")
         return
     
-    # Combine embeddings
     all_embeddings = torch.stack(high_embeddings + low_embeddings + [user_embedding]).numpy()
     labels = (["high"] * len(high_embeddings)) + (["low"] * len(low_embeddings)) + ["user"]
-    
+
     reducer = umap.UMAP(random_state=42)
     reduced = reducer.fit_transform(all_embeddings)
 
@@ -247,32 +267,24 @@ def plot_embeddings_umap(user_embedding, high_embeddings, low_embeddings):
     for lab in set(labels):
         idxs = [i for i, l in enumerate(labels) if l == lab]
         coords = reduced[idxs]
-        if lab == "high":
-            plt.scatter(coords[:, 0], coords[:, 1], c="green", label="High Drip")
-        elif lab == "low":
-            plt.scatter(coords[:, 0], coords[:, 1], c="red", label="Low Drip")
-        else:
-            plt.scatter(coords[:, 0], coords[:, 1], c="blue", label="User Fit", edgecolor="black", s=100)
+        plt.scatter(coords[:, 0], coords[:, 1], label=lab, edgecolor="black" if lab == "user" else None)
     plt.title("UMAP Projection of CLIP Embeddings")
     plt.legend()
     plt.tight_layout()
     plt.show()
 
-# Example: Use only high and low reference images for chosen style.
+# Visualize embeddings
 if chosen_style in reference_db and "high" in reference_db[chosen_style] and "low" in reference_db[chosen_style]:
     ref_high_data = reference_db[chosen_style]["high"]
     ref_low_data = reference_db[chosen_style]["low"]
-    # Find nearest fit from high-drip references:
     best_fit_path, best_sim = find_most_similar_fit(test_image_path, ref_high_data)
     print(f"\n📸 Your fit is closest to: {best_fit_path} (Similarity: {best_sim:.4f})")
-    print(f"Reference embeddings for {style} (high): {len(ref_high_data['embeddings'])}")
-    print(f"Reference embeddings for {style} (low): {len(ref_low_data['embeddings'])}")
-    
-    # For UMAP visualization, get one test embedding:
+    print(f"Reference embeddings for {chosen_style} (high): {len(ref_high_data['embeddings'])}")
+    print(f"Reference embeddings for {chosen_style} (low): {len(ref_low_data['embeddings'])}")
+
     image = preprocess(Image.open(test_image_path)).unsqueeze(0).to(device)
     with torch.no_grad():
         user_embedding = model.encode_image(image).cpu().squeeze()
     plot_embeddings_umap(user_embedding, ref_high_data["embeddings"], ref_low_data["embeddings"])
-
 else:
     print(f"[!] Insufficient reference images for style {chosen_style} to generate visualization.")
