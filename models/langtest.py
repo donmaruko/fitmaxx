@@ -3,6 +3,7 @@ from langchain.tools import tool
 from langchain.agents import initialize_agent, AgentType
 from langchain_openai import ChatOpenAI
 from typing import TypedDict, Optional
+import matplotlib.pyplot as plt
 import clip
 import torch
 from PIL import Image
@@ -16,7 +17,7 @@ import mediapipe as mp
 
 if "OPENAI_API_KEY" not in os.environ:
     raise EnvironmentError("❌ Please set your OPENAI_API_KEY environment variable before running this script.")
-llm = ChatOpenAI(model="gpt-3.5-turbo")  # or "gpt-4" if available
+llm = ChatOpenAI(model="gpt-4o-mini")  # or "gpt-4" if available
 
 # -----------------------------
 # Setup and CLIP model loading
@@ -135,32 +136,37 @@ def extract_body_ratios(image_path: str) -> tuple[Optional[float], Optional[floa
 
         return torso_leg_ratio, limb_symmetry
 
-
 # -----------------------------
 # Image scoring
 # -----------------------------
 def score_image_cosine(image_path, style, reference_db):
-    def score_image(image_path, reference_embeddings):
+    def get_embedding(image_path):
         raw_image = Image.open(image_path)
-        person_only_image = remove_background(raw_image)  # 👈 crop background
+        person_only_image = remove_background(raw_image)
         image = preprocess(person_only_image).unsqueeze(0).to(device)
-
         with torch.no_grad():
-            image_embedding = model.encode_image(image).cpu()
-        image_embedding /= image_embedding.norm(dim=-1, keepdim=True)
-        reference_embeddings = torch.stack(reference_embeddings)
-        reference_embeddings /= reference_embeddings.norm(dim=-1, keepdim=True)
-        similarities = (reference_embeddings @ image_embedding.T).squeeze()
-        return similarities.mean().item()
+            embedding = model.encode_image(image).cpu().squeeze()
+            embedding /= embedding.norm()
+        return embedding
 
+    test_embed = get_embedding(image_path)
     high_embeds = reference_db[style]["high"]["embeddings"]
     low_embeds = reference_db[style]["low"]["embeddings"]
-    sim_high = score_image(image_path, high_embeds)
-    sim_low = score_image(image_path, low_embeds)
-    raw_score = sim_high - sim_low
-    drip_score = round((raw_score + 1) / 2 * 100, 2)
-    return drip_score
 
+    high_stack = torch.stack(high_embeds)
+    low_stack = torch.stack(low_embeds)
+
+    high_stack /= high_stack.norm(dim=-1, keepdim=True)
+    low_stack /= low_stack.norm(dim=-1, keepdim=True)
+
+    sim_to_high = torch_cos_sim(test_embed, high_stack).mean().item()
+    sim_to_low = torch_cos_sim(test_embed, low_stack).mean().item()
+
+    # Normalize position between low/high anchors
+    drip_score = (sim_to_high - sim_to_low) / (1e-5 + (sim_to_high + sim_to_low))
+    drip_score = round((drip_score + 1) / 2 * 100, 2)
+
+    return drip_score
 
 # -----------------------------
 # LangGraph: Branching Logic
@@ -288,7 +294,7 @@ workflow = graph.compile()
 
 # Example usage
 if __name__ == "__main__":
-    state = {"image_path": "whatever.jpeg", "style": "athleisure"}
+    state = {"image_path": "uglysuit.jpg", "style": "formal"}
     final_state = workflow.invoke(state)
     print("\n===== FINAL OUTFIT ANALYSIS =====")
     print(f"🖼️  Image Path: {final_state['image_path']}")

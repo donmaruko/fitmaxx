@@ -1,0 +1,15 @@
+# Ignore full directories
+dev/
+tests/
+outfits/
+
+# Ignore specific files
+frontend/uitest.py
+models/__pycache__/
+models/cnnpredict.py
+models/cnntrain.py
+
+# Python cache and virtual environment (general good practice)
+__pycache__/
+*.pyc
+venv/

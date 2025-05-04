@@ -57,7 +57,7 @@ CSS = """
 
 # ---------- Gradio app ----------
 with gr.Blocks(title="FitMaxx", theme=THEME, css=CSS) as demo:
-    gr.Markdown("👔👟 **FitMaxx** — *your personal outfit grader*", elem_id="title")
+    gr.Markdown("👔👟 **FitMaxx** — *your personal outfit wingman*", elem_id="title")
 
     with gr.Row(equal_height=True):
         img = gr.Image(
