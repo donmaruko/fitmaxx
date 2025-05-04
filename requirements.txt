@@ -1,29 +1,50 @@
---extra-index-url https://download.pytorch.org/whl/cpu
+# PyTorch and related libraries
+torch==2.2.2
+torchvision==0.17.2
+torchaudio==2.2.2
 
+# CLIP model
 clip @ git+https://github.com/openai/CLIP.git@dcba3cb2e2827b402d2701e7e1c7d9fed8a20ef1
-filelock==3.13.1
-fsspec==2024.6.1
-ftfy==6.3.1
-Jinja2==3.1.4
-joblib==1.4.2
+
+# Gradio for UI
+gradio==3.35.2
+
+# LangChain and related tools
 langchain-core==0.1.46
 langgraph==0.0.43
-MarkupSafe==2.1.5
-matplotlib==3.8.4
-mediapipe==0.10.9
-mpmath==1.3.0
-networkx==3.3
-numpy==1.26.4
-packaging==23.2
+langchain_openai
+
+# Image processing
 pillow==11.0.0
-pydantic==2.7.1
-regex==2024.11.6
+rembg==2.0.30
+
+# Pose estimation
+mediapipe==0.10.9
+
+# Data manipulation and utilities
+numpy==1.26.4
 scikit-learn==1.5.0
-sympy==1.13.3
-torch==2.2.2
-torchaudio==2.2.2
-torchvision==0.17.2
+matplotlib==3.8.4
 tqdm==4.67.1
-typing_extensions==4.12.2
+joblib==1.4.2
 umap-learn==0.5.6
+
+# Regex and text utilities
+regex==2024.11.6
+ftfy==6.3.1
 wcwidth==0.2.13
+
+# Python utilities
+filelock==3.13.1
+fsspec==2024.6.1
+typing_extensions==4.12.2
+Jinja2==3.1.4
+MarkupSafe==2.1.5
+sympy==1.13.3
+mpmath==1.3.0
+
+# ONNX runtime for inference
+onnxruntime==1.15.1
+
+# OpenAI API
+openai==0.27.8
