@@ -62,7 +62,6 @@ pycryptodomex==3.21.0
 pycups==2.0.4
 pyenchant==3.2.2
 pygit2==1.17.0
-PyGObject==3.50.0
 pykickstart==3.62
 pyOpenSSL==25.0.0
 pyparted==3.13.0
