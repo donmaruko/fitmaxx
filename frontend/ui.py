@@ -4,7 +4,7 @@ import os, re, subprocess, pathlib, gradio as gr
 # ---------- paths ----------
 ROOT       = pathlib.Path(__file__).resolve().parent.parent
 MODEL_DIR  = ROOT / "models"
-CNNSCRIPT  = MODEL_DIR / "cnnpredict.py"
+CNNSCRIPT  = MODEL_DIR / "predict.py"
 
 # ---------- inference helper ----------
 def grade_fit(img_path: str, style: str) -> str:
@@ -13,6 +13,7 @@ def grade_fit(img_path: str, style: str) -> str:
 
     img_path = pathlib.Path(img_path).resolve()
 
+    # Run predict.py
     proc = subprocess.run(
         ["python", str(CNNSCRIPT), str(img_path), style],
         text=True, capture_output=True,
@@ -26,21 +27,37 @@ def grade_fit(img_path: str, style: str) -> str:
     md = proc.stdout
 
     # ── POST‑PROCESS ─────────────────────────────────────────
-    # 1. drop the camera‑emoji “Analyzing:” line
     md = re.sub(r"(?m)^🖼️.*\n?", "", md)
-
-    # 2. inject hard line‑breaks (<br>) before each header token
-    #    so they render on separate lines
-    md = re.sub(r" +💧",  "  \n💧",  md)   # two spaces → hard <br>
+    md = re.sub(r" +💧",  "  \n💧",  md)
     md = re.sub(r" +👍",  "  \n👍",  md)
     md = re.sub(r" +🚨",  "  \n🚨",  md)
     md = re.sub(r" +❗",  "  \n❗",  md)
-    # Ensure "Style" and "Drip Score" are on separate lines
     md = re.sub(r"(🎯 Style: .+?) (💧 Drip Score: .+)", r"\1  \n\2", md)
-
-    # 3. add an extra blank line after the feedback line for spacing
     md = re.sub(r"(💧.*|👍.*|🚨.*|❗.*)$", r"\1\n", md, flags=re.M)
 
+    # Run proportionmatch.py and append result
+    prop_proc = subprocess.run(
+        ["python", "proportionmatch.py", "--image", str(img_path), "--csv", "proportiondata.csv"],
+        text=True, capture_output=True,
+        cwd=MODEL_DIR,
+        env=os.environ,
+    )
+
+    # Combine stdout and stderr lines
+    all_lines = (prop_proc.stdout + prop_proc.stderr).strip().splitlines()
+
+    if prop_proc.returncode == 0:
+        for line in all_lines:
+            if "Proportions are" in line:
+                insertion = f"\n🧍 {line.strip()}\n"
+
+                if "🧠 Fit Analysis" in md:
+                    md = md.replace("🧠 Fit Analysis", insertion + "\n🧠 Fit Analysis")
+                else:
+                    md += insertion
+                break
+    else:
+        md += "\n⚠️ Could not analyze proportions.\n"
     return md
 
 # ---------- UI theme & CSS ----------
