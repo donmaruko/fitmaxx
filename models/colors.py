@@ -125,21 +125,22 @@ class ProportionScorer:
 
         hues = [rgb_to_hue(hex_to_rgb(color)) for color in colors.values()]
         harmony_score = 0
+        n = 0
 
         # Compare hues for complementary or analogous harmony
         for i, h1 in enumerate(hues):
             for j, h2 in enumerate(hues):
                 if i >= j:
                     continue
+                n += 1
                 diff = abs(h1 - h2)
                 if diff > 180:
                     diff = 360 - diff  # Wrap around the color wheel
                 if 150 <= diff <= 210:  # Complementary colors
-                    harmony_score += 20
+                    harmony_score += (30.0 - abs(diff-180))/30 * 50 + 50
                 elif 30 <= diff <= 60:  # Analogous colors
-                    harmony_score += 10
-        max_possible_score = len(hues) * (len(hues) - 1) / 2 * 20  # Max score for complementary pairs
-        return (harmony_score / max_possible_score) * 100 if max_possible_score > 0 else 0
+                    harmony_score += (30.0 - abs(diff-180))/30 * 50 + 25
+        return harmony_score / n
 
 # ──────────────────────────────────────────────────────────────────────────────
 def _analyze_image(img_path: Path) -> None:
@@ -158,8 +159,8 @@ def _analyze_image(img_path: Path) -> None:
     # ── pretty print ───────────────────────────────────────────
     print(f"\n[{img_path.name}]")
     print("-"*(len(img_path.name)+2))
-    verdict = "✅ Balanced" if balance>=75 else "⚠️  Could improve" if balance>=50 else "🧦 Off‑balance"
-    print(f" ► Outfit‑balance   : {balance} / 100   {verdict}")
+    verdict = "✅ Balanced" if balance>=75  else "⚠️  Could improve" if balance>=50 else "🧦 Off‑balance"
+    print(f" ► Color‑balance   : {balance} / 100   {verdict}")
 
 # ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
