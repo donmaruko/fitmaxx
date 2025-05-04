@@ -8,10 +8,10 @@ The AI gives you a 0–100 “drip score,” explains what works, and suggests s
 
 ## 🧠 How It Works
 
-FitMaxx uses a lightweight Convolutional Neural Network (CNN) combined with a classifier to:
+FitMaxx uses a lightweight **Multilayer Perceptron (MLP) classifier** powered by **CLIP** features to:
 
 1. **Learn outfit quality** by training on labeled images organized by style and quality tier (`high`, `med`, `low`).
-2. **Predict outfit quality** by extracting features from a new outfit photo and scoring it against what it learned.
+2. **Predict outfit quality** by extracting semantic and body-proportion features from a new outfit photo and scoring it based on learned patterns.
 
 ---
 
@@ -69,16 +69,16 @@ FitMaxx is style-agnostic - you can teach it any aesthetic by giving it data:
 1. Create a new directory under `outfits/`, for example `outfits/athleisure/`
 
 2. Add images into `high/`, `med/`, `low/` subfolders
-- These represent good, bad, and mediocre examples of outfits in that style.
+> These represent good, bad, and mediocre examples of outfits in that style.
 
 3. Train the model:
 ```bash
 python models/train.py athleisure
 ```
-- This would create its own weight files within `models/`
+This would create its own weight files within `models/`
 
 4. Update the `predict.py` and `ui.py` files to accommodate this new style
-- WORK IN PROGRESS
+> WORK IN PROGRESS
 
 Now your model will know how to evaluate athleisure outfits!
 
@@ -86,21 +86,30 @@ Now your model will know how to evaluate athleisure outfits!
 
 ## 🔧 Built With
 
-- **PyTorch** - MLP training and inference
-- **Gradio** - Elegant web UI
-- **Pillow / torchvision** - image I/O and preprocessing
-- **OpenAI API** - Feedback rationalization
+| Technologies             | Purpose                                                |
+|--------------------------|--------------------------------------------------------|
+| **CLIP (ViT-B/32)**      | Pretrained vision model for feature extraction         |
+| **LangChain**            | Extract body ratio data                                |
+| **NumPy and PIL**        | Image loading, feature concatenation                   |
+| **MediaPipe**            | Pose analysis for proportion-aware feedback            |
+| **PyTorch**              | MLP training and inference                             |
+| **scikit-learn**         | Train/test split, weighted sampling, classification    |
+| **rembg**                | Background removal for isolation                       |
+| **Gradio**               | Elegant web UI                                         |
+| **Pillow / torchvision** | Image I/O and preprocessing                            |
+| **OpenAI API**           | Vision-based feedback rationalization                  |
 
 ---
 
 ## 📌 TODO / Future Ideas
 
 - Add support for adding new styles and improve modularity
-
+- Wrap the pipeline in a scalable API service to support async training
 - Let users upload new training data through the UI
-
 - Visualization of score attribution (heatmaps / CAM)
-
 - Batch scoring for image folders
+- Let users define a new style using natural language descriptions instead of image folders
+- Use a vector database to store outfit embeddings for similarity search, custom style matching, or per-user models
+- Use self-supervised learning to pretrain outfit embeddings on unlabeled data to reduce dependency on manual labels
 
 ---
