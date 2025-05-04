@@ -8,7 +8,6 @@ blivet==3.12.1
 boltons==25.0.0
 boto3==1.37.38
 botocore==1.37.38
-Brlapi==0.8.6
 Brotli==1.1.0
 certifi==2024.8.30
 cffi==1.17.1
