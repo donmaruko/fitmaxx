@@ -13,6 +13,8 @@ FitMaxx uses a lightweight **Multilayer Perceptron (MLP) classifier** powered by
 1. **Learn outfit quality** by training on labeled images organized by style and quality tier (`high`, `med`, `low`).
 2. **Predict outfit quality** by extracting semantic and body-proportion features from a new outfit photo and scoring it based on learned patterns.
 
+FitMaxx includes a proportion-aware scoring module. It complements the aesthetic score by evaluating **body proportions and clothing balance**, using pose estimate and heuristic-based scoring. It computes a **boosted balance score** based on how well the user dresses to their body proportions.
+
 ---
 
 ## 🗂️ Project Structure
