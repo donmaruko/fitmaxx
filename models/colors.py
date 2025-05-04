@@ -3,13 +3,13 @@ import sys
 from pathlib import Path
 from typing import Optional, Dict, Tuple
 
-import mediapipe as mp
 import numpy  as np
 from PIL import Image
 import cv2
 import torch
 from torchvision import transforms
 from colorsys import rgb_to_hls
+import mediapipe as mp
 
 mp_pose = mp.solutions.pose
 device  = "cuda" if torch.cuda.is_available() else "cpu"
@@ -110,6 +110,26 @@ class ProportionScorer:
             "hem_sym": hem_sym,
         }
     
+    @staticmethod
+    def body_to_colors(body: Dict[str, float]) -> Dict[str, str]:
+        """
+        Convert body metrics to a dictionary of hex color codes.
+        """
+        def value_to_color(value: float, min_val: float = 0, max_val: float = 2) -> str:
+            """
+            Map a value to a color on a red (low) to green (high) gradient.
+            """
+            value = max(min_val, min(max_val, value))  # Clamp value between min_val and max_val
+            ratio = (value - min_val) / (max_val - min_val)  # Normalize to [0, 1]
+            r = int(255 * (1 - ratio))  # Red decreases as value increases
+            g = int(255 * ratio)        # Green increases as value increases
+            b = 0                       # No blue component
+            return f"#{r:02X}{g:02X}{b:02X}"  # Convert to hex color
+
+        # Map each body metric to a color
+        return {key: value_to_color(value) for key, value in body.items()}
+    
+    @staticmethod
     def color_harmony_score(colors: Dict[str, str]) -> float:
         """
         Calculate a harmony score based on the HLS (Hue, Lightness, Saturation) model.
@@ -154,7 +174,7 @@ def _analyze_image(img_path: Path) -> None:
     body    = scorer.compute_body_metrics(lm)
     brk     = scorer.detect_clothing_breakpoints(np.array(img.convert("RGB")), lm)
     vis_rat = scorer.compute_visible_ratios(brk, lm)
-    balance = scorer.color_harmony_score(body, vis_rat)
+    balance = scorer.color_harmony_score(scorer.body_to_colors(body))
 
     # ── pretty print ───────────────────────────────────────────
     print(f"\n[{img_path.name}]")
