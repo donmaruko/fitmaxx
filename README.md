@@ -26,15 +26,16 @@ fitmaxx/
 ├── frontend/
 │ └── ui.py # Gradio interface
 ├── models/
-│ ├── train.py # Train model on images in outfits/<style>/
-│ ├── predict.py # Core prediction logic
-│ ├── langtest.py # Pose/body proportion helper
+│ ├── train.py               # Train model on images in outfits/<style>/
+│ ├── predict.py             # Core prediction logic
+│ ├── langtest.py            # Pose/body proportion helper
+│ ├── proportion*            # Body proportion model files
 │ └── *.pt # Model weights
 ├── outfits/
-│ └── <style>/ # e.g. casual/, formal/, vintage/
-│       ├── high/ # Good outfits for that style
-│       ├── med/  # Decent outfits for that style
-│       └── low/  # Bad outfits for that style
+│ └── <style>/               # e.g. casual/, formal/, vintage/
+│       ├── high/            # Good outfits for that style
+│       ├── med/             # Decent outfits for that style
+│       └── low/             # Bad outfits for that style
 ├── requirements.txt
 ├── .gitignore 
 └── README.md 
