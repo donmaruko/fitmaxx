@@ -6,6 +6,14 @@ The model rates your outfit from 0 to 100 based on how well it fits the selected
 
 ---
 
+## 🎯 Vision
+
+Fashion should be accessible to everyone, but it's often gatekept by obscure rules and elitist standards. This project aims to break those barriers by promoting fashion literacy and helping anyone understand how to dress well - regardless of background or body type. We've trained models to objectively assess outfit quality based on built-in parameters like proportions.
+
+Our project scores how well an outfit complements your unique body proportions - not society's idea of the "ideal" body. The goal is to make fashion more inclusive, helping people feel confident and informed in their style choices, no matter what style they choose.
+
+---
+
 ## 🧠 How It Works
 
 FitMaxx uses a lightweight **Multilayer Perceptron (MLP) classifier** powered by **CLIP** features to:
