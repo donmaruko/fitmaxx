@@ -1,7 +1,7 @@
 # Ignore full directories
 dev/
 tests/
-outfits/
+outfits_/
 
 # Ignore specific files
 frontend/uitest.py
