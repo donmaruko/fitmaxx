@@ -1,126 +1,143 @@
-# train.py
-import os
-import sys
-import torch
-import clip
+# cnntrain.py – 3‑class Cross‑Entropy version
+# -----------------------------------------------------------------------------
+# Trains an MLP that outputs 3 logits (low / med / high) instead of a single
+# regression value. Loss is CrossEntropy, and evaluation uses argmax.
+# -----------------------------------------------------------------------------
+
+import os, sys, warnings
+from collections import Counter
+
 import numpy as np
 from PIL import Image
+
+import torch, clip, torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import TensorDataset, DataLoader, WeightedRandomSampler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, accuracy_score
+
 from langtest import extract_body_ratios
 
-# -----------------------------
-# CLI Args
-# -----------------------------
+# ----------------------------- CLI -----------------------------
 if len(sys.argv) != 2:
-    print("Usage: python train.py <style>")
+    print("Usage: python cnntrain.py <style>")
     sys.exit(1)
 
-input_style = sys.argv[1].lower()
-valid_styles = ['formal', 'casual', 'athleisure']
-if input_style not in valid_styles:
-    print(f"❌ Invalid style. Choose from: {valid_styles}")
-    sys.exit(1)
+STYLE = sys.argv[1].lower()
+VALID = ["formal","casual","athleisure"]
+if STYLE not in VALID:
+    sys.exit(f"❌ Invalid style. Choose from: {VALID}")
 
-# -----------------------------
-# Setup CLIP
-# -----------------------------
-device = "cuda" if torch.cuda.is_available() else "cpu"
-model, preprocess = clip.load("ViT-B/32", device=device)
+# ----------------------------- Device + CLIP -----------------------------
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+clip_model, clip_prep = clip.load("ViT-B/32", device=DEVICE)
 
-def extract_embedding(image_path):
-    image = preprocess(Image.open(image_path)).unsqueeze(0).to(device)
+# ----------------------------- Feature extraction -----------------------------
+
+def extract_embedding(path:str):
+    img = clip_prep(Image.open(path)).unsqueeze(0).to(DEVICE)
     with torch.no_grad():
-        embedding = model.encode_image(image).cpu().squeeze().numpy()
-    return embedding
+        return clip_model.encode_image(img).cpu().squeeze().numpy()
 
-def extract_features(image_path):
-    clip_emb = extract_embedding(image_path)
-    torso_leg_ratio, limb_symmetry = extract_body_ratios(image_path)
-    if torso_leg_ratio is None or limb_symmetry is None:
-        raise ValueError("Pose detection failed.")
-    return np.concatenate((clip_emb, [torso_leg_ratio, limb_symmetry]))
+def extract_features(path:str):
+    clip_emb = extract_embedding(path)
+    tlr, sym = extract_body_ratios(path)
+    if tlr is None or sym is None:
+        raise ValueError("Pose detection failed")
+    tlr  = np.clip(tlr/3,0,1)
+    sym  = np.clip(sym/2,0,1)
+    return np.concatenate((clip_emb,[tlr*0.2,sym*0.2]))
 
-# -----------------------------
-# Build Dataset
-# -----------------------------
-base_dir = "../outfits"
+# ----------------------------- Load dataset -----------------------------
+BASE = "../outfits"; style_dir = os.path.join(BASE, STYLE)
 X, y = [], []
+label_map = {"low":0, "med":1, "high":2}
 
-style_dir = os.path.join(base_dir, input_style)
-for label in ["high", "low"]:
-    folder = os.path.join(style_dir, label)
+for lbl in ["high","med","low"]:
+    folder = os.path.join(style_dir,lbl)
     if not os.path.isdir(folder):
         continue
     for fname in os.listdir(folder):
-        if not fname.lower().endswith(('.jpg', '.jpeg', '.png')):
+        if not fname.lower().endswith((".jpg",".jpeg",".png")):
             continue
-        path = os.path.join(folder, fname)
+        path = os.path.join(folder,fname)
         try:
-            feat = extract_features(path)
-            X.append(feat)
-            y.append(1 if label == "high" else 0)
+            X.append(extract_features(path))
+            y.append(label_map[lbl])
         except Exception as e:
-            print(f"⚠️ Skipped {fname}: {e}")
+            warnings.warn(f"Skip {fname}: {e}")
 
-X = np.array(X, dtype=np.float32)
-y = np.array(y, dtype=np.float32)
+X = np.asarray(X,dtype=np.float32)
+Y = np.asarray(y,dtype=np.int64)
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
+# ----------------------------- Train / test split -----------------------------
+X_tr,X_te,Y_tr,Y_te = train_test_split(X,Y,stratify=Y,test_size=0.2,random_state=42)
 
-# -----------------------------
-# Define and Train MLP
-# -----------------------------
-import torch.nn as nn
-import torch.optim as optim
-
+# ----------------------------- Model -----------------------------
 class OutfitMLP(nn.Module):
-    def __init__(self, input_dim):
+    def __init__(self,d):
         super().__init__()
-        self.model = nn.Sequential(
-            nn.Linear(input_dim, 256),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(256, 64),
-            nn.ReLU(),
-            nn.Linear(64, 1),
-            nn.Sigmoid()
+        self.net = nn.Sequential(
+            nn.Linear(d,384), nn.ReLU(), nn.Dropout(0.3),
+            nn.Linear(384,128), nn.ReLU(),
+            nn.Linear(128,3)  # logits for 3 classes
         )
-    def forward(self, x):
-        return self.model(x)
+    def forward(self,x):
+        return self.net(x)
 
-input_dim = X.shape[1]
-mlp = OutfitMLP(input_dim).to(device)
+model = OutfitMLP(X.shape[1]).to(DEVICE)
 
-X_train_t = torch.tensor(X_train, device=device)
-y_train_t = torch.tensor(y_train, device=device).unsqueeze(1)
+# ----------------------------- DataLoader -----------------------------
+X_tr_t = torch.tensor(X_tr,device=DEVICE)
+Y_tr_t = torch.tensor(Y_tr,device=DEVICE)
+train_ds = TensorDataset(X_tr_t,Y_tr_t)
 
-criterion = nn.BCELoss()
-optimizer = optim.Adam(mlp.parameters(), lr=1e-3)
+class_counts = Counter(Y_tr)
+weights = torch.tensor([1.0/class_counts[c] for c in Y_tr],dtype=torch.float32,device=DEVICE)
 
-print("🧠 Training MLP...")
-for epoch in range(20):
-    mlp.train()
-    optimizer.zero_grad()
-    outputs = mlp(X_train_t)
-    loss = criterion(outputs, y_train_t)
-    loss.backward()
-    optimizer.step()
-    if epoch % 5 == 0:
-        print(f"Epoch {epoch} — Loss: {loss.item():.4f}")
+def make_sampler(labels):
+    freq = Counter(labels)               # e.g. {'low': 210, 'med': 430, 'high': 790}
+    weights = [1.0 / freq[y] for y in labels]
+    return torch.utils.data.WeightedRandomSampler(weights, num_samples=len(weights), replacement=True)
 
-# -----------------------------
-# Evaluation
-# -----------------------------
-mlp.eval()
-X_test_t = torch.tensor(X_test, device=device)
-with torch.no_grad():
-    preds = mlp(X_test_t).cpu().squeeze().numpy()
+loader = DataLoader(train_ds,batch_size=32,sampler=WeightedRandomSampler(weights,len(weights)))
 
-y_pred = (preds >= 0.5).astype(int)
-print("\n📊 Evaluation Report:")
-print(classification_report(y_test, y_pred))
-print(f"🎯 Accuracy: {accuracy_score(y_test, y_pred) * 100:.2f}%")
+# ----------------------------- Optim & loss -----------------------------
+criterion = nn.CrossEntropyLoss(label_smoothing=0.05)
 
-torch.save(mlp.state_dict(), f"fit_mlp_{input_style}.pt")
-print(f"✅ Model weights saved to fit_mlp_{input_style}.pt")
+optimizer = optim.Adam(model.parameters(),lr=1e-3)
+scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer,T_max=100)
+
+# ----------------------------- Train -----------------------------
+print("🧠 Training 3‑class MLP …")
+best_acc=0; patience=10; no_improve=0
+for epoch in range(100):
+    model.train(); tot=0
+    for xb,yb in loader:
+        optimizer.zero_grad()
+        loss = criterion(model(xb), yb)
+        loss.backward(); optimizer.step(); tot+=loss.item()
+    scheduler.step()
+
+    # quick val
+    model.eval();
+    with torch.no_grad():
+        preds = model(torch.tensor(X_te,device=DEVICE)).cpu().argmax(1).numpy()
+    acc = accuracy_score(Y_te,preds)
+    print(f"Epoch {epoch:02d}  loss {tot/len(loader):.4f}  val_acc {acc*100:.2f}%")
+    if acc>best_acc:
+        best_acc, no_improve = acc,0
+        torch.save(model.state_dict(),f"fit_mlp_{STYLE}.pt")
+    else:
+        no_improve+=1
+        if no_improve==patience:
+            print("Early stop."); break
+
+print("✅ Best val accuracy:",best_acc*100)
+
+# ----------------------------- Final report -----------------------------
+model.load_state_dict(torch.load(f"fit_mlp_{STYLE}.pt",map_location=DEVICE))
+model.eval();
+with torch.no_grad(): final_preds = model(torch.tensor(X_te,device=DEVICE)).cpu().argmax(1).numpy()
+print("\n📊 Classification Report:")
+print(classification_report(Y_te,final_preds,target_names=["low","med","high"]))
