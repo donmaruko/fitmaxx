@@ -2,7 +2,7 @@
 
 FitMaxx is a modular AI web app that analyzes outfit photos and rates how well they match a chosen **style** — such as `formal`, `casual`, or even custom aesthetics like `alternative` or `techwear`.
 
-The AI gives you a 0–100 “drip score,” explains what works, and suggests specific improvements — all through a clean Gradio web interface.
+The model rates your outfit from 0 to 100 based on how well it fits the selected style. It highlights what works, suggests style-specific improvements, and delivers everything through a Gradio web interface.
 
 ---
 
